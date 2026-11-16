@@ -28,10 +28,21 @@ import {
   saveProject,
 } from '../../lib/storage';
 import { colors } from '../../lib/theme';
-import type { Project } from '../../lib/types';
+import {
+  formatSeconds,
+  frameDuration,
+  MAX_DURATION_MS,
+  MIN_DURATION_MS,
+  totalDuration,
+  type Project,
+} from '../../lib/types';
 
 const MIN_FPS = 1;
 const MAX_FPS = 30;
+const DURATION_PRESETS = [100, 250, 500, 1000, 2000];
+
+/** Schrittweite für −/+ abhängig von der aktuellen Dauer */
+const durationStep = (ms: number) => (ms < 500 ? 50 : ms < 2000 ? 100 : 500);
 
 export default function ProjectScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -59,15 +70,16 @@ export default function ProjectScreen() {
     setProject(await saveProject(next));
   }, []);
 
-  // Wiedergabe
+  // Wiedergabe: jedes Bild bleibt so lange stehen, wie seine Anzeigedauer vorgibt
   useEffect(() => {
     if (!playing || !project || project.frames.length === 0) return;
-    const timer = setInterval(
+    const frame = project.frames[playIndex % project.frames.length];
+    const timer = setTimeout(
       () => setPlayIndex((i) => (i + 1) % project.frames.length),
-      1000 / project.fps,
+      frameDuration(project, frame),
     );
-    return () => clearInterval(timer);
-  }, [playing, project]);
+    return () => clearTimeout(timer);
+  }, [playing, playIndex, project]);
 
   if (!project) {
     return (
@@ -95,6 +107,39 @@ export default function ProjectScreen() {
 
   const changeFps = (delta: number) =>
     update({ ...project, fps: Math.min(MAX_FPS, Math.max(MIN_FPS, project.fps + delta)) });
+
+  const setDuration = (durationMs: number | undefined) => {
+    if (!hasFrames) return;
+    const clamped =
+      durationMs === undefined
+        ? undefined
+        : Math.min(MAX_DURATION_MS, Math.max(MIN_DURATION_MS, Math.round(durationMs)));
+    const next = frames.map((f, i) => (i === selected ? { ...f, durationMs: clamped } : f));
+    update({ ...project, frames: next });
+  };
+
+  const stepDuration = (dir: -1 | 1) => {
+    const ms = frameDuration(project, frames[selected]);
+    setDuration(ms + dir * durationStep(dir < 0 ? ms - 1 : ms));
+  };
+
+  const applyDurationToAll = () => {
+    if (!hasFrames) return;
+    const durationMs = frames[selected].durationMs;
+    Alert.alert(
+      'Für alle Bilder übernehmen?',
+      durationMs === undefined
+        ? 'Alle Bilder verwenden dann wieder die Standard-Geschwindigkeit.'
+        : `Alle ${frames.length} Bilder werden ${formatSeconds(durationMs)} lang angezeigt.`,
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Übernehmen',
+          onPress: () => update({ ...project, frames: frames.map((f) => ({ ...f, durationMs })) }),
+        },
+      ],
+    );
+  };
 
   const addFromGallery = async () => {
     setPlaying(false);
@@ -207,7 +252,8 @@ export default function ProjectScreen() {
               fadeDuration={0}
             />
             <Text style={styles.counter}>
-              {(playing ? playIndex : selected) + 1} / {frames.length}
+              {(playing ? playIndex : selected) + 1} / {frames.length} ·{' '}
+              {formatSeconds(totalDuration(project))}
             </Text>
           </>
         ) : (
@@ -233,7 +279,9 @@ export default function ProjectScreen() {
                 index === (playing ? playIndex : selected) && styles.stripThumbActive,
               ]}
             />
-            <Text style={styles.stripIndex}>{index + 1}</Text>
+            <Text style={[styles.stripIndex, item.durationMs !== undefined && styles.stripCustom]}>
+              {item.durationMs !== undefined ? formatSeconds(item.durationMs) : index + 1}
+            </Text>
           </Pressable>
         )}
       />
@@ -272,10 +320,55 @@ export default function ProjectScreen() {
           />
           <View style={styles.fpsBox}>
             <Button small label="−" onPress={() => changeFps(-1)} />
-            <Text style={styles.fpsText}>{project.fps} fps</Text>
+            <Text style={styles.fpsText}>
+              {project.fps} fps{'\n'}
+              <Text style={styles.small}>Standard</Text>
+            </Text>
             <Button small label="+" onPress={() => changeFps(1)} />
           </View>
         </View>
+
+        {hasFrames && !playing && (
+          <View style={styles.panel}>
+            <View style={styles.row}>
+              <Text style={styles.label}>
+                Anzeigedauer Bild {selected + 1}:{' '}
+                <Text style={styles.bold}>
+                  {formatSeconds(frameDuration(project, frames[selected]))}
+                </Text>
+                {frames[selected].durationMs === undefined && (
+                  <Text style={styles.small}> (Standard)</Text>
+                )}
+              </Text>
+              <Button small label="−" onPress={() => stepDuration(-1)} />
+              <Button small label="+" onPress={() => stepDuration(1)} />
+            </View>
+            <View style={styles.row}>
+              {DURATION_PRESETS.map((ms) => (
+                <Button
+                  key={ms}
+                  small
+                  label={formatSeconds(ms)}
+                  style={[
+                    styles.flex,
+                    frames[selected].durationMs === ms && styles.presetActive,
+                  ]}
+                  onPress={() => setDuration(ms)}
+                />
+              ))}
+            </View>
+            <View style={styles.row}>
+              <Button
+                small
+                label="Standard"
+                style={styles.flex}
+                disabled={frames[selected].durationMs === undefined}
+                onPress={() => setDuration(undefined)}
+              />
+              <Button small label="Für alle übernehmen" style={styles.flex} onPress={applyDurationToAll} />
+            </View>
+          </View>
+        )}
 
         <View style={styles.row}>
           <Button small label="◀" style={styles.flex} disabled={selected === 0} onPress={() => moveFrame(-1)} />
@@ -344,6 +437,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   stripThumbActive: { borderColor: colors.accent },
+  stripCustom: { color: colors.accent, fontWeight: '600' },
+  panel: { backgroundColor: colors.surface, borderRadius: 14, padding: 12, gap: 10 },
+  presetActive: { backgroundColor: colors.accent },
+  bold: { fontWeight: '700' },
+  small: { color: colors.muted, fontSize: 11 },
   stripIndex: { color: colors.muted, fontSize: 10, textAlign: 'center', marginTop: 2 },
   controls: { padding: 16, gap: 12 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },

@@ -3,7 +3,7 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 import * as jpeg from 'jpeg-js';
 import { frameUri } from './storage';
-import type { Project } from './types';
+import { frameDuration, type Project } from './types';
 
 export type ExportOptions = {
   /** Breite des GIFs in Pixeln */
@@ -24,7 +24,6 @@ export async function exportGif(project: Project, opts: ExportOptions = {}): Pro
   const width = Math.round(opts.width ?? 480);
   const first = frames[0];
   const height = Math.max(1, Math.round((width * first.height) / first.width));
-  const delay = Math.round(1000 / project.fps);
 
   const gif = GIFEncoder();
   for (let i = 0; i < frames.length; i++) {
@@ -38,7 +37,11 @@ export async function exportGif(project: Project, opts: ExportOptions = {}): Pro
 
     const palette = quantize(decoded.data, 256);
     const index = applyPalette(decoded.data, palette);
-    gif.writeFrame(index, decoded.width, decoded.height, { palette, delay, repeat: 0 });
+    gif.writeFrame(index, decoded.width, decoded.height, {
+      palette,
+      delay: frameDuration(project, frames[i]),
+      repeat: 0,
+    });
 
     opts.onProgress?.(i + 1, frames.length);
     await nextTick(); // UI atmen lassen

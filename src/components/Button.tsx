@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 import { colors } from '../lib/theme';
 
 type Props = {
@@ -6,7 +6,7 @@ type Props = {
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   small?: boolean;
 };
 

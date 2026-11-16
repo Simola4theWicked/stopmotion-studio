@@ -8,8 +8,9 @@ Eine Stop-Motion-App für **Android und iOS**, gebaut mit [Expo](https://expo.de
 - **Fotos aufnehmen** mit der eingebauten Kamera – inkl. **Zwiebelhaut** (das letzte Bild wird halbtransparent über das Live-Bild gelegt, 0/25/40/60 %), Front-/Rückkamera
 - **Bilder aus der Galerie importieren** – Mehrfachauswahl in der gewählten Reihenfolge, Einfügen hinter dem aktuell ausgewählten Bild
 - **Filmstreifen-Editor**: Bilder verschieben (◀ ▶), duplizieren (für Pausen) und löschen
-- **Vorschau/Abspielen** mit einstellbarer Geschwindigkeit (1–30 fps)
-- **Export als animiertes GIF** – direkt in die Galerie speichern oder über das Teilen-Menü versenden
+- **Anzeigedauer pro Bild**: jedes Bild kann eigens lange zu sehen sein (Schnellwahl 0,1 / 0,25 / 0,5 / 1 / 2 s, feinjustierbar per −/+, bis 10 s) – oder es gilt die Standard-Geschwindigkeit des Projekts (1–30 fps). Mit „Für alle übernehmen“ lässt sich eine Dauer auf alle Bilder anwenden.
+- **Vorschau/Abspielen** mit den eingestellten Anzeigedauern
+- **Export als animiertes GIF** (übernimmt die Anzeigedauer jedes Bildes) – direkt in die Galerie speichern oder über das Teilen-Menü versenden
 
 Alle Daten bleiben lokal auf dem Gerät (`Documents/projects/<id>/`).
 
@@ -61,4 +62,3 @@ src/
 - Export als MP4-Video (benötigt ein natives Video-Encoding-Modul)
 - Ton/Musik unterlegen
 - Intervall-Aufnahme (Timelapse) und Lautstärketasten als Auslöser
-- Einzelbild-Dauer pro Frame

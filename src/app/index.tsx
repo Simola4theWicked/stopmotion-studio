@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../components/Button';
 import { createProject, deleteProject, frameUri, listProjects } from '../lib/storage';
 import { colors } from '../lib/theme';
-import type { Project } from '../lib/types';
+import { formatSeconds, totalDuration, type Project } from '../lib/types';
 
 export default function ProjectsScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -66,8 +66,7 @@ export default function ProjectsScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{item.name}</Text>
               <Text style={styles.muted}>
-                {item.frames.length} Bilder · {item.fps} fps ·{' '}
-                {(item.frames.length / item.fps).toFixed(1)} s
+                {item.frames.length} Bilder · {formatSeconds(totalDuration(item))}
               </Text>
             </View>
           </Pressable>
