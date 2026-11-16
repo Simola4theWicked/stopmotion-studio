@@ -16,6 +16,7 @@
     "expo-router": "~58.0.31",
     "expo-sharing": "~58.0.23",
     "expo-status-bar": "~58.0.5",
+    "expo-system-ui": "~58.0.7",
     "gifenc": "^1.0.3",
     "jpeg-js": "^0.4.4",
     "react": "19.3.0",
@@ -29,8 +30,8 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint"

@@ -18,7 +18,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../../components/Button';
+import { ExportSheet, type ExportFormat, type ExportTarget } from '../../components/ExportSheet';
 import { exportGif } from '../../lib/exportGif';
+import { exportVideo, isVideoExportAvailable } from '../../lib/exportVideo';
 import {
   deleteFrameFile,
   duplicateFrameFile,
@@ -52,6 +54,7 @@ export default function ProjectScreen() {
   const [playIndex, setPlayIndex] = useState(0);
   const [onionSkin, setOnionSkin] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const stripRef = useRef<FlatList>(null);
 
   // Projekt beim Öffnen und nach Rückkehr von der Kamera neu laden
@@ -196,8 +199,9 @@ export default function ProjectScreen() {
     setSelected(Math.max(0, selected - 1));
   };
 
-  const runExport = async (target: 'share' | 'gallery') => {
+  const runExport = async (format: ExportFormat, target: ExportTarget) => {
     setPlaying(false);
+    const label = format === 'mp4' ? 'Video' : 'GIF';
     try {
       if (target === 'gallery') {
         const perm = await requestPermissionsAsync(true);
@@ -206,29 +210,27 @@ export default function ProjectScreen() {
           return;
         }
       }
-      setBusy('Erstelle GIF …');
-      const file = await exportGif(project, {
-        onProgress: (done, total) => setBusy(`Erstelle GIF … ${done}/${total}`),
-      });
+      setBusy(`Erstelle ${label} …`);
+      const onProgress = (done: number, total: number) =>
+        setBusy(`Erstelle ${label} … ${done}/${total}`);
+      const file =
+        format === 'mp4'
+          ? await exportVideo(project, { onProgress })
+          : await exportGif(project, { onProgress });
       if (target === 'gallery') {
         await Asset.create(file.uri);
-        Alert.alert('Gespeichert', 'Das GIF liegt jetzt in deiner Galerie.');
+        Alert.alert('Gespeichert', `Das ${label} liegt jetzt in deiner Galerie.`);
+      } else if (format === 'mp4') {
+        await Sharing.shareAsync(file.uri, { mimeType: 'video/mp4', UTI: 'public.mpeg-4' });
       } else {
         await Sharing.shareAsync(file.uri, { mimeType: 'image/gif', UTI: 'com.compuserve.gif' });
       }
     } catch (e) {
-      Alert.alert('Export fehlgeschlagen', String(e));
+      Alert.alert('Export fehlgeschlagen', e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
   };
-
-  const onExport = () =>
-    Alert.alert('Film exportieren', 'Als animiertes GIF exportieren:', [
-      { text: 'In Galerie speichern', onPress: () => runExport('gallery') },
-      { text: 'Teilen …', onPress: () => runExport('share') },
-      { text: 'Abbrechen', style: 'cancel' },
-    ]);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -392,8 +394,15 @@ export default function ProjectScreen() {
           />
         </View>
 
-        <Button label="⬇️ Als GIF exportieren" disabled={!hasFrames} onPress={onExport} />
+        <Button label="⬇️ Exportieren (MP4 / GIF)" disabled={!hasFrames} onPress={() => setExportOpen(true)} />
       </ScrollView>
+
+      <ExportSheet
+        visible={exportOpen}
+        videoAvailable={isVideoExportAvailable()}
+        onClose={() => setExportOpen(false)}
+        onSelect={runExport}
+      />
 
       {busy && (
         <View style={styles.overlay}>

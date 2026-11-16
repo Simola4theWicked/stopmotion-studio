@@ -1,0 +1,84 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION_NAME: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Typprüfung
+        run: npx tsc --noEmit
+
+      - name: Android-Projekt erzeugen (expo prebuild)
+        run: npx expo prebuild --platform android --no-install
+        env:
+          CI: 1
+
+      - name: Versionsnummer setzen
+        run: |
+          sed -i -E "s/versionCode [0-9]+/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i -E "s/versionName \"[^\"]+\"/versionName \"$VERSION_NAME\"/" android/app/build.gradle
+          grep -E "versionCode|versionName" android/app/build.gradle
+
+      - name: APK bauen
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: APK umbenennen
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/StopMotionStudio-$VERSION_NAME.apk"
+          ls -lh dist
+
+      - name: Als Build-Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: StopMotionStudio-${{ env.VERSION_NAME }}
+          path: dist/*.apk
+
+      - name: GitHub-Release mit APK veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: Stop Motion Studio ${{ env.VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: dist/*.apk
+          body: |
+            Automatischer Android-Build von `${{ github.sha }}`.
+
+            **Installation:** `StopMotionStudio-${{ env.VERSION_NAME }}.apk` unten herunterladen, auf dem Handy öffnen und die Installation aus unbekannten Quellen erlauben.
+
+            Hinweis: Die APK ist mit dem Debug-Schlüssel signiert und für die Installation per Hand gedacht, nicht für den Play Store.
