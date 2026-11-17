@@ -1,4 +1,4 @@
-import * as ImagePicker from 'expo-image-picker';
+import { Image } from 'expo-image';
 import { Asset, requestPermissionsAsync } from 'expo-media-library';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -7,25 +7,22 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../../components/Button';
 import { ExportSheet, type ExportFormat, type ExportTarget } from '../../components/ExportSheet';
+import { ProjectSettingsSheet } from '../../components/ProjectSettingsSheet';
 import { exportGif } from '../../lib/exportGif';
 import { exportVideo, isVideoExportAvailable } from '../../lib/exportVideo';
 import {
   deleteFrameFile,
   duplicateFrameFile,
   frameUri,
-  importImage,
   loadProject,
   saveProject,
 } from '../../lib/storage';
@@ -42,6 +39,9 @@ import {
 const MIN_FPS = 1;
 const MAX_FPS = 30;
 const DURATION_PRESETS = [100, 250, 500, 1000, 2000];
+const THUMB_W = 64;
+const THUMB_GAP = 6;
+const PREFETCH_AHEAD = 6;
 
 /** Schrittweite für −/+ abhängig von der aktuellen Dauer */
 const durationStep = (ms: number) => (ms < 500 ? 50 : ms < 2000 ? 100 : 500);
@@ -55,15 +55,29 @@ export default function ProjectScreen() {
   const [onionSkin, setOnionSkin] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const stripRef = useRef<FlatList>(null);
 
-  // Projekt beim Öffnen und nach Rückkehr von der Kamera neu laden
+  // Projekt beim Öffnen und nach Rückkehr von Kamera/Galerie neu laden
+  const projectRef = useRef<Project | null>(null);
+  projectRef.current = project;
   useFocusEffect(
     useCallback(() => {
       loadProject(id).then((p) => {
         if (!p) return router.back();
+        const prev = projectRef.current;
+        // nach einem Import das zuletzt eingefügte Bild auswählen
+        let lastNew = -1;
+        if (prev && p.frames.length > prev.frames.length) {
+          const prevIds = new Set(prev.frames.map((f) => f.id));
+          p.frames.forEach((f, i) => {
+            if (!prevIds.has(f.id)) lastNew = i;
+          });
+        }
         setProject(p);
-        setSelected((s) => Math.min(Math.max(s, 0), Math.max(p.frames.length - 1, 0)));
+        setSelected((s) =>
+          lastNew >= 0 ? lastNew : Math.min(Math.max(s, 0), Math.max(p.frames.length - 1, 0)),
+        );
       });
     }, [id]),
   );
@@ -76,13 +90,29 @@ export default function ProjectScreen() {
   // Wiedergabe: jedes Bild bleibt so lange stehen, wie seine Anzeigedauer vorgibt
   useEffect(() => {
     if (!playing || !project || project.frames.length === 0) return;
-    const frame = project.frames[playIndex % project.frames.length];
-    const timer = setTimeout(
-      () => setPlayIndex((i) => (i + 1) % project.frames.length),
-      frameDuration(project, frame),
-    );
+    const n = project.frames.length;
+    const frame = project.frames[playIndex % n];
+    // die nächsten Bilder vorab dekodieren, damit beim Wechsel nichts flackert
+    const upcoming = [];
+    for (let k = 1; k <= Math.min(PREFETCH_AHEAD, n - 1); k++) {
+      upcoming.push(frameUri(project.id, project.frames[(playIndex + k) % n]));
+    }
+    if (upcoming.length) Image.prefetch(upcoming, 'memory').catch(() => {});
+    const timer = setTimeout(() => setPlayIndex((i) => (i + 1) % n), frameDuration(project, frame));
     return () => clearTimeout(timer);
   }, [playing, playIndex, project]);
+
+  const activeIndex = playing ? playIndex : selected;
+
+  // Filmstreifen mitlaufen lassen
+  useEffect(() => {
+    if (!project || project.frames.length === 0) return;
+    stripRef.current?.scrollToIndex({
+      index: Math.min(activeIndex, project.frames.length - 1),
+      viewPosition: 0.5,
+      animated: !playing,
+    });
+  }, [activeIndex, playing, project]);
 
   if (!project) {
     return (
@@ -94,8 +124,9 @@ export default function ProjectScreen() {
 
   const frames = project.frames;
   const hasFrames = frames.length > 0;
-  const current = playing ? frames[playIndex] : frames[selected];
+  const current = frames[activeIndex];
   const previous = !playing && onionSkin && selected > 0 ? frames[selected - 1] : null;
+  const selectedFrame = frames[selected];
 
   const selectFrame = (index: number) => {
     setPlaying(false);
@@ -104,8 +135,18 @@ export default function ProjectScreen() {
 
   const togglePlay = () => {
     if (!hasFrames) return;
-    setPlayIndex(0);
-    setPlaying((p) => !p);
+    if (playing) {
+      setPlaying(false);
+      setSelected(playIndex);
+      return;
+    }
+    const start = selected >= frames.length - 1 ? 0 : selected;
+    Image.prefetch(
+      frames.slice(start, start + PREFETCH_AHEAD).map((f) => frameUri(project.id, f)),
+      'memory',
+    ).catch(() => {});
+    setPlayIndex(start);
+    setPlaying(true);
   };
 
   const changeFps = (delta: number) =>
@@ -122,13 +163,13 @@ export default function ProjectScreen() {
   };
 
   const stepDuration = (dir: -1 | 1) => {
-    const ms = frameDuration(project, frames[selected]);
+    const ms = frameDuration(project, selectedFrame);
     setDuration(ms + dir * durationStep(dir < 0 ? ms - 1 : ms));
   };
 
   const applyDurationToAll = () => {
     if (!hasFrames) return;
-    const durationMs = frames[selected].durationMs;
+    const durationMs = selectedFrame.durationMs;
     Alert.alert(
       'Für alle Bilder übernehmen?',
       durationMs === undefined
@@ -144,33 +185,17 @@ export default function ProjectScreen() {
     );
   };
 
-  const addFromGallery = async () => {
+  const openCamera = () => {
     setPlaying(false);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      orderedSelection: true,
-      selectionLimit: 0,
-      quality: 1,
+    router.push(`/camera/${project.id}`);
+  };
+
+  const openGallery = () => {
+    setPlaying(false);
+    router.push({
+      pathname: '/picker/[id]',
+      params: { id: project.id, at: String(hasFrames ? selected + 1 : 0) },
     });
-    if (result.canceled || result.assets.length === 0) return;
-    try {
-      const added = [];
-      for (let i = 0; i < result.assets.length; i++) {
-        setBusy(`Importiere ${i + 1}/${result.assets.length} …`);
-        const a = result.assets[i];
-        added.push(await importImage(project.id, a.uri, a.width, a.height));
-      }
-      // hinter dem ausgewählten Bild einfügen
-      const insertAt = hasFrames ? selected + 1 : 0;
-      const nextFrames = [...frames.slice(0, insertAt), ...added, ...frames.slice(insertAt)];
-      await update({ ...project, frames: nextFrames });
-      setSelected(insertAt + added.length - 1);
-    } catch (e) {
-      Alert.alert('Import fehlgeschlagen', String(e));
-    } finally {
-      setBusy(null);
-    }
   };
 
   const moveFrame = (delta: -1 | 1) => {
@@ -184,7 +209,7 @@ export default function ProjectScreen() {
 
   const duplicateFrame = () => {
     if (!hasFrames) return;
-    const copy = duplicateFrameFile(project.id, frames[selected]);
+    const copy = duplicateFrameFile(project.id, selectedFrame);
     const next = [...frames];
     next.splice(selected + 1, 0, copy);
     update({ ...project, frames: next });
@@ -193,10 +218,14 @@ export default function ProjectScreen() {
 
   const deleteFrame = () => {
     if (!hasFrames) return;
-    const frame = frames[selected];
-    deleteFrameFile(project.id, frame);
-    update({ ...project, frames: frames.filter((f) => f.id !== frame.id) });
+    deleteFrameFile(project.id, selectedFrame);
+    update({ ...project, frames: frames.filter((f) => f.id !== selectedFrame.id) });
     setSelected(Math.max(0, selected - 1));
+  };
+
+  const openExport = () => {
+    if (playing) togglePlay();
+    setExportOpen(true);
   };
 
   const runExport = async (format: ExportFormat, target: ExportTarget) => {
@@ -234,34 +263,45 @@ export default function ProjectScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <Stack.Screen options={{ title: project.name }} />
+      <Stack.Screen
+        options={{
+          title: project.name,
+          headerRight: () => (
+            <Pressable onPress={() => setSettingsOpen(true)} hitSlop={12}>
+              <Text style={styles.headerButton}>⚙︎</Text>
+            </Pressable>
+          ),
+        }}
+      />
 
-      {/* Vorschau */}
-      <View style={styles.preview}>
+      {/* Vorschau – füllt den freien Platz */}
+      <Pressable style={styles.preview} onPress={togglePlay}>
         {current ? (
           <>
             {previous && (
               <Image
                 source={{ uri: frameUri(project.id, previous) }}
                 style={StyleSheet.absoluteFill}
-                resizeMode="contain"
+                contentFit="contain"
+                transition={0}
               />
             )}
             <Image
               source={{ uri: frameUri(project.id, current) }}
               style={[StyleSheet.absoluteFill, previous && { opacity: 0.6 }]}
-              resizeMode="contain"
-              fadeDuration={0}
+              contentFit="contain"
+              transition={0}
+              cachePolicy="memory"
+              priority="high"
             />
             <Text style={styles.counter}>
-              {(playing ? playIndex : selected) + 1} / {frames.length} ·{' '}
-              {formatSeconds(totalDuration(project))}
+              {activeIndex + 1} / {frames.length} · {formatSeconds(totalDuration(project))}
             </Text>
           </>
         ) : (
           <Text style={styles.muted}>Füge dein erstes Bild hinzu 📸</Text>
         )}
-      </View>
+      </Pressable>
 
       {/* Filmstreifen */}
       <FlatList
@@ -272,136 +312,101 @@ export default function ProjectScreen() {
         style={styles.strip}
         contentContainerStyle={styles.stripContent}
         showsHorizontalScrollIndicator={false}
+        getItemLayout={(_, index) => ({
+          length: THUMB_W + THUMB_GAP,
+          offset: 8 + (THUMB_W + THUMB_GAP) * index,
+          index,
+        })}
+        initialNumToRender={12}
+        windowSize={5}
+        onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => (
-          <Pressable onPress={() => selectFrame(index)}>
+          <Pressable onPress={() => selectFrame(index)} style={styles.stripItem}>
             <Image
               source={{ uri: frameUri(project.id, item) }}
-              style={[
-                styles.stripThumb,
-                index === (playing ? playIndex : selected) && styles.stripThumbActive,
-              ]}
+              style={[styles.stripThumb, index === activeIndex && styles.stripThumbActive]}
+              contentFit="cover"
+              recyclingKey={item.id}
+              transition={0}
             />
-            <Text style={[styles.stripIndex, item.durationMs !== undefined && styles.stripCustom]}>
+            <Text
+              style={[styles.stripIndex, item.durationMs !== undefined && styles.stripCustom]}
+              numberOfLines={1}
+            >
               {item.durationMs !== undefined ? formatSeconds(item.durationMs) : index + 1}
             </Text>
           </Pressable>
         )}
       />
 
-      <ScrollView contentContainerStyle={styles.controls}>
-        <TextInput
-          style={styles.nameInput}
-          defaultValue={project.name}
-          placeholder="Projektname"
-          placeholderTextColor={colors.muted}
-          onEndEditing={(e) => {
-            const name = e.nativeEvent.text.trim();
-            if (name && name !== project.name) update({ ...project, name });
-          }}
-        />
-
-        <View style={styles.row}>
-          <Button
-            label="📷 Kamera"
-            variant="primary"
-            style={styles.flex}
-            onPress={() => {
-              setPlaying(false);
-              router.push(`/camera/${project.id}`);
-            }}
-          />
-          <Button label="🖼️ Galerie" variant="primary" style={styles.flex} onPress={addFromGallery} />
-        </View>
-
-        <View style={styles.row}>
-          <Button
-            label={playing ? '⏹ Stopp' : '▶️ Abspielen'}
-            style={styles.flex}
-            disabled={!hasFrames}
-            onPress={togglePlay}
-          />
-          <View style={styles.fpsBox}>
-            <Button small label="−" onPress={() => changeFps(-1)} />
-            <Text style={styles.fpsText}>
-              {project.fps} fps{'\n'}
-              <Text style={styles.small}>Standard</Text>
+      {/* Bild bearbeiten (nur im Stand) */}
+      {hasFrames && !playing && selectedFrame && (
+        <View style={styles.panel}>
+          <View style={styles.row}>
+            <Text style={styles.label} numberOfLines={1}>
+              Bild {selected + 1}:{' '}
+              <Text style={styles.bold}>{formatSeconds(frameDuration(project, selectedFrame))}</Text>
+              {selectedFrame.durationMs === undefined && <Text style={styles.small}> Std.</Text>}
             </Text>
-            <Button small label="+" onPress={() => changeFps(1)} />
+            <Button small label="−" onPress={() => stepDuration(-1)} />
+            <Button small label="+" onPress={() => stepDuration(1)} />
+            <View style={styles.divider} />
+            <Button small label="◀" disabled={selected === 0} onPress={() => moveFrame(-1)} />
+            <Button small label="▶" disabled={selected >= frames.length - 1} onPress={() => moveFrame(1)} />
+            <Button small label="⧉" onPress={duplicateFrame} />
+            <Button small label="🗑" variant="danger" onPress={deleteFrame} />
           </View>
-        </View>
-
-        {hasFrames && !playing && (
-          <View style={styles.panel}>
-            <View style={styles.row}>
-              <Text style={styles.label}>
-                Anzeigedauer Bild {selected + 1}:{' '}
-                <Text style={styles.bold}>
-                  {formatSeconds(frameDuration(project, frames[selected]))}
-                </Text>
-                {frames[selected].durationMs === undefined && (
-                  <Text style={styles.small}> (Standard)</Text>
-                )}
-              </Text>
-              <Button small label="−" onPress={() => stepDuration(-1)} />
-              <Button small label="+" onPress={() => stepDuration(1)} />
-            </View>
-            <View style={styles.row}>
-              {DURATION_PRESETS.map((ms) => (
-                <Button
-                  key={ms}
-                  small
-                  label={formatSeconds(ms)}
-                  style={[
-                    styles.flex,
-                    frames[selected].durationMs === ms && styles.presetActive,
-                  ]}
-                  onPress={() => setDuration(ms)}
-                />
-              ))}
-            </View>
-            <View style={styles.row}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+            {DURATION_PRESETS.map((ms) => (
               <Button
+                key={ms}
                 small
-                label="Standard"
-                style={styles.flex}
-                disabled={frames[selected].durationMs === undefined}
-                onPress={() => setDuration(undefined)}
+                label={formatSeconds(ms)}
+                style={selectedFrame.durationMs === ms ? styles.presetActive : undefined}
+                onPress={() => setDuration(ms)}
               />
-              <Button small label="Für alle übernehmen" style={styles.flex} onPress={applyDurationToAll} />
-            </View>
-          </View>
-        )}
-
-        <View style={styles.row}>
-          <Button small label="◀" style={styles.flex} disabled={selected === 0} onPress={() => moveFrame(-1)} />
-          <Button
-            small
-            label="▶"
-            style={styles.flex}
-            disabled={selected >= frames.length - 1}
-            onPress={() => moveFrame(1)}
-          />
-          <Button small label="Duplizieren" style={styles.flex} disabled={!hasFrames} onPress={duplicateFrame} />
-          <Button small label="Löschen" variant="danger" style={styles.flex} disabled={!hasFrames} onPress={deleteFrame} />
+            ))}
+            <Button
+              small
+              label="Standard"
+              disabled={selectedFrame.durationMs === undefined}
+              onPress={() => setDuration(undefined)}
+            />
+            <Button small label="Für alle übernehmen" onPress={applyDurationToAll} />
+          </ScrollView>
         </View>
+      )}
 
-        <View style={[styles.row, styles.switchRow]}>
-          <Text style={styles.label}>Zwiebelhaut (vorheriges Bild einblenden)</Text>
-          <Switch
-            value={onionSkin}
-            onValueChange={setOnionSkin}
-            trackColor={{ true: colors.accent, false: colors.border }}
-          />
-        </View>
-
-        <Button label="⬇️ Exportieren (MP4 / GIF)" disabled={!hasFrames} onPress={() => setExportOpen(true)} />
-      </ScrollView>
+      {/* Aktionsleiste – immer sichtbar */}
+      <View style={styles.bottomBar}>
+        <Button label="📷 Kamera" style={styles.flex} onPress={openCamera} />
+        <Button label="🖼️ Galerie" style={styles.flex} onPress={openGallery} />
+        <Button
+          label={playing ? '⏹' : '▶️'}
+          variant="primary"
+          style={styles.play}
+          disabled={!hasFrames}
+          onPress={togglePlay}
+        />
+        <Button label="⬇️ Export" style={styles.flex} disabled={!hasFrames} onPress={openExport} />
+      </View>
 
       <ExportSheet
         visible={exportOpen}
         videoAvailable={isVideoExportAvailable()}
         onClose={() => setExportOpen(false)}
         onSelect={runExport}
+      />
+
+      <ProjectSettingsSheet
+        visible={settingsOpen}
+        name={project.name}
+        fps={project.fps}
+        onionSkin={onionSkin}
+        onClose={() => setSettingsOpen(false)}
+        onRename={(name) => update({ ...project, name })}
+        onChangeFps={changeFps}
+        onToggleOnionSkin={setOnionSkin}
       />
 
       {busy && (
@@ -417,9 +422,10 @@ export default function ProjectScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
+  headerButton: { color: colors.text, fontSize: 22, paddingHorizontal: 8 },
   preview: {
-    aspectRatio: 4 / 3,
-    width: '100%',
+    flex: 1,
+    minHeight: 160,
     backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
@@ -436,9 +442,10 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   strip: { flexGrow: 0, backgroundColor: colors.surface },
-  stripContent: { padding: 8, gap: 6 },
+  stripContent: { padding: 8 },
+  stripItem: { width: THUMB_W + THUMB_GAP, paddingRight: THUMB_GAP },
   stripThumb: {
-    width: 64,
+    width: THUMB_W,
     height: 48,
     borderRadius: 6,
     borderWidth: 2,
@@ -446,34 +453,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   stripThumbActive: { borderColor: colors.accent },
+  stripIndex: { color: colors.muted, fontSize: 10, textAlign: 'center', marginTop: 2 },
   stripCustom: { color: colors.accent, fontWeight: '600' },
-  panel: { backgroundColor: colors.surface, borderRadius: 14, padding: 12, gap: 10 },
+  panel: { paddingHorizontal: 12, paddingTop: 10, gap: 8 },
+  row: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  chips: { gap: 6 },
+  divider: { width: 1, height: 24, backgroundColor: colors.border, marginHorizontal: 2 },
   presetActive: { backgroundColor: colors.accent },
+  label: { color: colors.text, flex: 1 },
   bold: { fontWeight: '700' },
   small: { color: colors.muted, fontSize: 11 },
-  stripIndex: { color: colors.muted, fontSize: 10, textAlign: 'center', marginTop: 2 },
-  controls: { padding: 16, gap: 12 },
-  row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  flex: { flex: 1 },
-  fpsBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 4,
-  },
-  fpsText: { color: colors.text, minWidth: 52, textAlign: 'center', fontVariant: ['tabular-nums'] },
-  switchRow: { justifyContent: 'space-between' },
-  label: { color: colors.text, flex: 1 },
   muted: { color: colors.muted },
-  nameInput: {
-    color: colors.text,
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 16,
+  flex: { flex: 1 },
+  play: { width: 64 },
+  bottomBar: {
+    flexDirection: 'row',
+    gap: 8,
+    padding: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    marginTop: 10,
   },
   overlay: {
     position: 'absolute',

@@ -1,6 +1,7 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../components/Button';
 import { createProject, deleteProject, frameUri, listProjects } from '../lib/storage';
@@ -57,7 +58,11 @@ export default function ProjectsScreen() {
             onLongPress={() => onDelete(item)}
           >
             {item.frames[0] ? (
-              <Image source={{ uri: frameUri(item.id, item.frames[0]) }} style={styles.thumb} />
+              <Image
+                source={{ uri: frameUri(item.id, item.frames[0]) }}
+                style={styles.thumb}
+                contentFit="cover"
+              />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]}>
                 <Text style={styles.muted}>leer</Text>

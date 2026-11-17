@@ -35,21 +35,14 @@
         }
       ],
       [
-        "expo-image-picker",
-        {
-          "photosPermission": "Der Zugriff auf deine Fotos wird benötigt, um Bilder als Frames zu importieren.",
-          "cameraPermission": "Die Kamera wird benötigt, um Einzelbilder aufzunehmen.",
-          "microphonePermission": false
-        }
-      ],
-      [
         "expo-media-library",
         {
           "photosPermission": "Der Zugriff auf deine Fotos wird benötigt, um Bilder zu importieren.",
           "savePhotosPermission": "Wird benötigt, um fertige Animationen in deiner Galerie zu speichern.",
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "expo-image"
     ],
     "scheme": "stopmotion"
   }
